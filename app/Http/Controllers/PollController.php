@@ -26,6 +26,10 @@ class PollController extends Controller
                 ->paginate(12);
         });
 
+        foreach ($polls as $poll) {
+            $poll->total_votes += (int) Cache::get("pending_total_" . $poll->id, 0);
+        }
+
         return view('polls.index',['polls' => $polls]);
     }
 
