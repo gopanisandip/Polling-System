@@ -40,8 +40,8 @@
                                 <small class="text-muted">
                                     <i class="fas fa-list mr-1"></i> {{ $poll->options_count }} options
                                 </small>
-                                <small class="text-muted">
-                                    <i class="fas fa-user mr-1"></i> {{ $poll->total_votes }} votes
+                                <small class="text-muted" id="poll-votes-{{ $poll->id }}">
+                                    <i class="fas fa-user mr-1"></i> <span class="vote-count">{{ $poll->total_votes }}</span> votes
                                 </small>
                             </div>
 
@@ -63,4 +63,24 @@
         {{ $polls->links() }}
     </div>
 @endif
+@push('scripts')
+<script>
+$(function() {
+    if (typeof window.socketIO === 'undefined') return;
+
+    var pollIds = @json($polls->pluck('id'));
+
+    pollIds.forEach(function(id) {
+        window.socketIO.emit('subscribe', 'poll.' + id);
+    });
+
+    window.socketIO.on('vote.recorded', function(data) {
+        var el = $('#poll-votes-' + data.poll_id + ' .vote-count');
+        if (el.length) {
+            el.text(data.total_votes);
+        }
+    });
+});
+</script>
+@endpush
 @endsection
