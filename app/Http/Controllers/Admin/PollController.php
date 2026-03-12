@@ -47,6 +47,7 @@ class PollController extends Controller
                 'user_id' => auth()->id(),
                 'title' => $validated['title'],
                 'description' => $validated['description'] ?? null,
+                'is_active' => true,
                 'end_at' => $validated['end_at'] ?? null,
             ]);
 
