@@ -2,10 +2,14 @@ import './bootstrap';
 
 import { io } from 'socket.io-client';
 
-const socketHost = import.meta.env.VITE_SOCKET_IO_HOST || 'localhost';
-const socketPort = import.meta.env.VITE_SOCKET_IO_PORT || 6001;
+// Development: connect directly to localhost:6001
+const socketUrl = import.meta.env.VITE_SOCKET_IO_URL
+    || (window.location.protocol === 'https:'
+        ? window.location.origin
+        : `http://${import.meta.env.VITE_SOCKET_IO_HOST || 'localhost'}:${import.meta.env.VITE_SOCKET_IO_PORT || 6001}`);
 
-window.socketIO = io(`http://${socketHost}:${socketPort}`, {
+window.socketIO = io(socketUrl, {
+    path: '/socket.io',
     transports: ['websocket', 'polling'],
     reconnection: true,
     reconnectionAttempts: 10,
