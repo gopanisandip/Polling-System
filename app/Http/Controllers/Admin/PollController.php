@@ -129,11 +129,8 @@ class PollController extends Controller
     {
         $this->authorizePoll($poll);
 
-        DB::transaction(function () use ($poll) {
-            $poll->votes()->delete();
-            $poll->options()->delete();
-            $poll->delete();
-        });
+        // no need transaction here because we already have database with cancade delete..so it will handle internally by database
+        $poll->delete(); 
 
         $this->clearPollCache($poll);
 

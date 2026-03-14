@@ -12,6 +12,7 @@ use Illuminate\Queue\SerializesModels;
 use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Redis;
+use Illuminate\Support\Facades\Log;
 
 class UpdatePendingVotes implements ShouldQueue
 {
@@ -32,34 +33,59 @@ class UpdatePendingVotes implements ShouldQueue
 
         if (empty($votes)) {
             Cache::forget("flush_scheduled_" . $this->pollId);
-            dump('Empty Votes');
             return;
         }
         
         $optionCounts = [];
+        $totalCount = count($votes);
 
         foreach ($votes as $vote) {
             $optionId = $vote['poll_option_id'];
             $optionCounts[$optionId] = ($optionCounts[$optionId] ?? 0) + 1;
         }
 
-        $totalCount = count($votes);
-
         try {
 
             DB::transaction(function () use ($votes, $optionCounts, $totalCount) {
 
                 $inserted = DB::table('votes')->insertOrIgnore($votes);
-                    
-                foreach ($optionCounts as $optionId => $count) {
-                    DB::table('poll_options')
-                        ->where('id', $optionId)
-                        ->increment('votes_count', $count);
-                }
 
-                DB::table('polls')
-                    ->where('id', $this->pollId)
-                    ->increment('total_votes', $totalCount);
+                /**
+                 *  old code always incremented by the full batch count, even when insertOrIgnore() 
+                 *  silently skipped duplicates. This caused vote counts to be 
+                 *  higher than actual votes in the DB (phantom votes).
+                 */
+                
+                if ($inserted === $totalAttempted) {
+
+                    foreach ($optionCounts as $optionId => $count) {
+                        DB::table('poll_options')
+                            ->where('id', $optionId)
+                            ->increment('votes_count', $count);
+                    }
+
+                    DB::table('polls')
+                        ->where('id', $this->pollId)
+                        ->increment('total_votes', $totalCount);
+
+                }else{
+
+                    $actualCounts = DB::table('votes')
+                        ->where('poll_id', $this->pollId)
+                        ->selectRaw('poll_option_id, COUNT(*) as cnt')
+                        ->groupBy('poll_option_id')
+                        ->pluck('cnt', 'poll_option_id');
+
+                    foreach ($actualCounts as $optionId => $count) {
+                        DB::table('poll_options')
+                            ->where('id', $optionId)
+                            ->update(['votes_count' => $count]);
+                    }
+
+                    DB::table('polls')
+                        ->where('id', $this->pollId)
+                        ->update(['total_votes' => $actualCounts->sum()]);
+                }
                
             });
 

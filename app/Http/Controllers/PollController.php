@@ -30,12 +30,12 @@ class PollController extends Controller
             $poll->total_votes += (int) Cache::get("pending_total_" . $poll->id, 0);
         }
 
-        return view('polls.index',['polls' => $polls]);
+        return view('polls.index', ['polls' => $polls]);
     }
 
     public function show(Request $request, $slug)
     {
-        $poll = Cache::remember("poll_" . $slug, 60 ,function () use ($slug) {
+        $poll = Cache::remember("poll_" . $slug, 60, function () use ($slug) {
             return Poll::where('slug', $slug)->with('options')->firstOrFail();
         });
 
@@ -55,9 +55,10 @@ class PollController extends Controller
 
     public function vote(Request $request, Poll $poll)
     {
+        $user = $request->user();
 
-        
-        $key = 'vote_' . $request->ip();
+        // Could bypass it by spoofing X-Forwarded-For. Now keyed by user_id when logged in
+        $key =  $user ? 'vote_user_' . $user->id : 'vote_ip_' . $request->ip();
 
         if (RateLimiter::tooManyAttempts($key, 10)) {
 
@@ -92,12 +93,12 @@ class PollController extends Controller
             ], 422);
         }
 
-        $ip = $request->ip();
-        $userId = auth()->id();
+        $voteKey = $this->voteCacheKey($request, $poll->id);
 
-        $voteKey = $this->voteCacheKey($poll->id);
-
-        if (Cache::has($voteKey)) {
+        /**
+         * Reduce redis call with add
+         */
+        if (!Cache::add($voteKey, (int) $request->option_id, 86400 * 365)) {
             return response()->json([
                 'success' => false,
                 'message' => 'Already voted on this poll.',
@@ -106,11 +107,12 @@ class PollController extends Controller
 
         $now = now()->toDateTimeString();
 
-        Redis::rpush("pending_votes_" .$poll->id, json_encode([
+        Redis::rpush("pending_votes_" . $poll->id, json_encode([
             'poll_id' => $poll->id,
             'poll_option_id' => (int) $request->option_id,
-            'user_id' => $userId,
-            'ip_address' => $ip,
+            'user_id' => $user?->id,
+            'ip_address' => $request->ip(), // Get directly from request no need to store
+            'voter_fingerprint' => $voteKey,
             'created_at' => $now,
             'updated_at' => $now,
         ]));
@@ -118,10 +120,8 @@ class PollController extends Controller
         Cache::increment("pending_count_" . $poll->id . "_" . $request->option_id);
         Cache::increment("pending_total_" . $poll->id );
 
-        Cache::forever($voteKey, (int) $request->option_id);
-
         if (!Cache::has("flush_scheduled_" . $poll->id)) {
-            Cache::put("flush_scheduled_". $poll->id , true, 90);
+            Cache::put("flush_scheduled_" . $poll->id, true, 90);
             UpdatePendingVotes::dispatch($poll->id)->delay(now()->addMinute());
         }
 
@@ -150,43 +150,33 @@ class PollController extends Controller
         ]);
     }
 
-    private function getVotedOptionId(int $pollId): ?int
+    private function getVotedOptionId(Request $request, int $pollId): ?int
     {
-        $key = $this->voteCacheKey($pollId);
+        $key = $this->voteCacheKey($request, $pollId);
         $cached = Cache::get($key);
 
         if ($cached !== null) {
             return (int) $cached;
         }
 
-        $userId = auth()->id();
-        $ip = request()->ip();
-
         $vote = Vote::where('poll_id', $pollId)
-            ->where(function ($q) use ($userId, $ip) {
-                if ($userId) {
-                    $q->where('user_id', $userId);
-                } else {
-                    $q->where('ip_address', $ip);
-                }
-            })
-            ->first();
+            ->where('voter_fingerprint', $voteKey)
+            ->first();  // Optimize query by making simple where condition
 
         if ($vote) {
-            Cache::forever($key, $vote->poll_option_id);
+            Cache::put($voteKey, $vote->poll_option_id, 86400 * 365); // Limit cache life time
             return (int) $vote->poll_option_id;
         }
 
         return null;
     }
 
-    private function voteCacheKey(int $pollId)
+    private function voteCacheKey(Request $request, int $pollId)
     {
-        if (auth()->check()) {
-            return "voted_" . $pollId . "user" . auth()->id();
-        }
+        $user = $request->user();
+        $identifier = $user ? 'u-' . $user->id : 'ip-' . $request->ip();
 
-        return "voted" . $pollId . "-ip-" . request()->ip();
+        return "voted_" . $pollId . "-" . $identifier;
     }
 
     private function applyPendingCounts(Poll $poll): void

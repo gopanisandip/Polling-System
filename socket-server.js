@@ -68,11 +68,21 @@ function createRedisClient(label) {
     return client;
 }
 
+/**
+ * Socket max connection limit added to make sure - server not overload 
+ */
+const MAX_CONNECTIONS = parseInt(process.env.SOCKET_MAX_CONNECTIONS || '15000', 10);
 
 const httpServer = createServer((req, res) => {
     if (req.url === '/health') {
         res.writeHead(200, { 'Content-Type': 'application/json' });
-        res.end(JSON.stringify({ status: 'ok', connections: io.engine.clientsCount }));
+        res.end(JSON.stringify({
+            status: 'ok',
+            connections: io.engine.clientsCount,
+            max_connections: MAX_CONNECTIONS,
+            uptime: process.uptime(),
+            memory_mb: Math.round(process.memoryUsage().heapUsed / 1024 / 1024),
+        }));
         return;
     }
     res.writeHead(404);
@@ -88,38 +98,43 @@ const io = new Server(httpServer, {
     pingTimeout: 60000,
     pingInterval: 25000,
     transports: ['websocket', 'polling'],
+    maxHttpBufferSize: 1000000, // 1mb
 });
 
 
 io.on('connection', (socket) => {
 
-    console.log(`Client connected: ${socket.id}`);
+    /**
+     * If connection is more than max allowed than disconnect 
+     */
+    if (io.engine.clientsCount > MAX_CONNECTIONS) {
+        socket.disconnect(true);
+        return;
+    }
 
     socket.on('subscribe', (channel) => {
-        socket.join(channel);
-        console.log(`${socket.id} subscrib to: ${channel}`);
+        // Added validation for limited length of size and only string allowe
+        if (typeof channel === 'string' && channel.length < 200) {
+            socket.join(channel);
+        }
+        
     });
 
     socket.on('unsubscribe', (channel) => {
         socket.leave(channel);
-        console.log(`${socket.id} unsubscribe from: ${channel}`);
     });
 
-    socket.on('disconnect', (reason) => {
-        console.log(`Client disconnected: ${socket.id} (${reason})`);
-    });
 });
 
 const subscriber = createRedisClient('Subscriber');
 
 subscriber.psubscribe(`${REDIS_PREFIX}*`, (err, count) => {
-    if (err) {
 
+    if (err) {
         console.error('Failed to psubscribe:', err.message);
         return;
-
     }
-    console.log(`Subscrib to pattern "${REDIS_PREFIX}*" (${count} pattern(s))`);
+
 });
 
 subscriber.on('pmessage', (pattern, redisChannel, message) => {
@@ -130,8 +145,6 @@ subscriber.on('pmessage', (pattern, redisChannel, message) => {
 
         const eventName = payload.event;
         const eventData = payload.data;
-
-        console.log(`Channel: ${channel} | Event: ${eventName}`);
 
         io.to(channel).emit(eventName, eventData);
     } catch (err) {
