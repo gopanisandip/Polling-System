@@ -39,7 +39,7 @@ class PollController extends Controller
             return Poll::where('slug', $slug)->with('options')->firstOrFail();
         });
 
-        $votedOptionId = $this->getVotedOptionId($poll->id);
+        $votedOptionId = $this->getVotedOptionId($request, $poll->id);
         $hasVoted = $votedOptionId !== null;
 
         // Add pending cached votes for real-time display
@@ -160,11 +160,11 @@ class PollController extends Controller
         }
 
         $vote = Vote::where('poll_id', $pollId)
-            ->where('voter_fingerprint', $voteKey)
+            ->where('voter_fingerprint', $key)
             ->first();  // Optimize query by making simple where condition
 
         if ($vote) {
-            Cache::put($voteKey, $vote->poll_option_id, 86400 * 365); // Limit cache life time
+            Cache::put($key, $vote->poll_option_id, 86400 * 365); // Limit cache life time
             return (int) $vote->poll_option_id;
         }
 
