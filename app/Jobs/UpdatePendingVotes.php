@@ -56,7 +56,7 @@ class UpdatePendingVotes implements ShouldQueue
                  *  higher than actual votes in the DB (phantom votes).
                  */
                 
-                if ($inserted === $totalAttempted) {
+                if ($inserted === $totalCount) {
 
                     foreach ($optionCounts as $optionId => $count) {
                         DB::table('poll_options')
